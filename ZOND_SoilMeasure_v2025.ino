@@ -93,10 +93,7 @@ void setup()
   //detachInterrupt(0); //запрещаем прерывания
   Wire.begin(); //запускаем twi
   analogReference(INTERNAL); //опорное напряжение для АЦП 1.1В
-  mySerial.begin(9600); //последовательный порт 9600 бит/с
-
-  //__________________ADC ADS1115 config_________________//
-  
+  mySerial.begin(9600); //последовательный порт 9600 бит/с  
   
   if (EEPROM.read(7) != 0x03) //проверят была ли настройка часов ранее
   {
@@ -441,65 +438,88 @@ int crc(void)
 
 
   void read_humADC(void){
+    uint8_t temp_points[7] = {3, 6, 9, 12, 15, 17, 19};
+    static bool measurements_done[7] = {false};
     int64_t adc0 = 0, adc1 = 0, adc2 = 0; 
     uint16_t adc0_sr = 0, adc1_sr = 0, adc2_sr = 0;
     uint8_t h0 = 0, h1 = 0, h2 = 0; 
-    uint16_t n = 1000;  // обьём выборки
+    uint16_t n = 1000;                                                // обьём выборки
     float k_5 = -0.0059; float k_10 = -0.0059; float k_15 = -0.0059;  //        коэфы функции 
     float b_5 = 118.65; float b_10 = 118.65;float b_15 = 118.65;      //    y = kx + b (H = k*ADC + b)
     uint16_t temp_ds18b20;
   ads.setGain(GAIN_ONE);
   ads.begin();
-
-    for (uint16_t i = 0; i < n; i++){ //0 - 32768
-      adc0 += ads.readADC_SingleEnded(0); // Чтение АЦП нулевого канала 
-      adc1 += ads.readADC_SingleEnded(1); // Чтение АЦП первого канала 
-      adc2 += ads.readADC_SingleEnded(2); // Чтение АЦП второго канала
-      }
-     adc0_sr = adc0/n; adc1_sr= adc1/n; adc2_sr = adc2/n;
-
-      signed short convert = (mydata[23] << 8) | mydata[22];
+        signed short convert = (mydata[23] << 8) | mydata[22];
       temp_ds18b20 = convert;
 
-      if(temp_ds18b20 < 5)
-      {
-        h0 = uint8_t(k_5*adc0_sr+b_5);     //расчет H% по линейной калибровочной функции
-        h1 = uint8_t(k_5*adc1_sr+b_5);
-        h2 = uint8_t(k_5*adc2_sr+b_5);
-        }
-        
-      if(temp_ds18b20 >= 5 && temp_ds18b20 <= 10)
-      {
-        h0 = uint8_t(k_5*adc0_sr+b_5);
-        h1 = uint8_t(k_5*adc1_sr+b_5);
-        h2 = uint8_t(k_5*adc2_sr+b_5);
-        } 
-        
-      if(temp_ds18b20 > 10 && temp_ds18b20 <= 15){
-        h0 = uint8_t(k_10*adc0_sr+b_10);
-        h1 = uint8_t(k_10*adc1_sr+b_10);
-        h2 = uint8_t(k_10*adc2_sr+b_10);
-        }
+ for (int i = 0; i < 7; i++) {
+        if (temp_ds18b20 >= temp_points[i] && !measurements_done[i]) {
+            // Обнуляем накопители
+            adc0 = 0; adc1 = 0; adc2 = 0;
+            
+            // Выполняем измерения
+            for (uint16_t k = 0; k < n; k++) {
+                adc0 += ads.readADC_SingleEnded(0);
+                adc1 += ads.readADC_SingleEnded(1);
+                adc2 += ads.readADC_SingleEnded(2);
+            }
+            
+            // Рассчитываем средние значения
+            adc0_sr = adc0 / n;
+            adc1_sr = adc1 / n;
+            adc2_sr = adc2 / n;
+            
+            // Выбираем коэффициенты в зависимости от температуры
+            float k, b;
            
-      if(temp_ds18b20 > 15){
-        h0 = uint8_t(k_15*adc0_sr+b_15);
-        h1 = uint8_t(k_15*adc1_sr+b_15);
-        h2 = uint8_t(k_15*adc2_sr+b_15);
+            if(temp_ds18b20 < 5)
+            {
+              k = k_5; b = b_5;             //расчет H% по линейной калибровочной функции
+              }
+              
+            if(temp_ds18b20 >= 5 && temp_ds18b20 <= 10)
+            {
+              k = k_5; b = b_5;
+              } 
+              
+            if(temp_ds18b20 > 10 && temp_ds18b20 <= 15){
+              k = k_10; b = b_10;
+              }
+                 
+            if(temp_ds18b20 > 15){
+              k = k_15; b = b_15;
+              }
+            
+            // Рассчитываем влажность
+            h0 = uint8_t(k * adc0_sr + b);
+            h1 = uint8_t(k * adc1_sr + b);
+            h2 = uint8_t(k * adc2_sr + b);
+            
+            // Сохраняем результаты
+            mydata[27] = h0;
+            mydata[28] = h1;
+            mydata[29] = h2;
+            
+            // Выводим результаты
+            mySerial.print("T:"); mySerial.println(temp_points[i]);
+            mySerial.print("ADC0:"); mySerial.print(adc0_sr); mySerial.print(":H0:"); mySerial.println(h0);
+            mySerial.print("ADC1:"); mySerial.print(adc1_sr); mySerial.print(":H1:"); mySerial.println(h1);
+            mySerial.print("ADC2:"); mySerial.print(adc2_sr); mySerial.print(":H2:"); mySerial.println(h2);
+            
+            // Помечаем точку как измеренную
+            measurements_done[i] = true;
+            
+            // Прерываем цикл после первого найденного измерения
+            break;
         }
-
-       
-
-  mySerial.print("ADC0 = "); mySerial.print(adc0_sr);  mySerial.print(" H0 = "); mySerial.print(h0); mySerial.println("%");
-  mySerial.print("ADC1 = "); mySerial.print(adc1_sr);  mySerial.print(" H1 ="); mySerial.print(h1); mySerial.println("%");
-  mySerial.print("ADC2 = "); mySerial.print(adc2_sr);  mySerial.print(" H2 ="); mySerial.print(h2); mySerial.println("%");
-  //mydata[27] = map(u0*100,99,250,100,0);  // влажность датчика №1 в процентах
-  //mydata[28] = map(u1*100,99,250,100,0); // влажность датчика №2 в процентах
-  //mydata[29] = map(u2*100,99,250,100,0); // влажность датчика №3 в процентах
-  mydata[27] = h0;  // напряжение(В) *100 датчика №1 2.55 = 255
-  mydata[28] = h1; // напряжение(В) *100 датчика №1 2.55 = 255
-  mydata[29] = h2; // напряжение(В) *100 датчика №1 2.55 = 255
   
   }
+  }
+
+
+
+
+
 
   void write_at24c256(void){
     unsigned long numWC = 0; // Счетчик циклов записи eeprom
